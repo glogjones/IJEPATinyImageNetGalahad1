@@ -327,16 +327,15 @@ class VisionTransformerPredictor(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    """ Vision Transformer """
+    """ Vision Transformer with Classification Head """
     def __init__(
         self,
         img_size=[224],
         patch_size=16,
         in_chans=3,
         embed_dim=768,
-        predictor_embed_dim=384,
+        num_classes=200,  # Specify number of classes
         depth=12,
-        predictor_depth=12,
         num_heads=12,
         mlp_ratio=4.0,
         qkv_bias=True,
@@ -351,29 +350,50 @@ class VisionTransformer(nn.Module):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.num_heads = num_heads
-        # --
+
+        # Patch embedding
         self.patch_embed = PatchEmbed(
             img_size=img_size[0],
             patch_size=patch_size,
             in_chans=in_chans,
-            embed_dim=embed_dim)
+            embed_dim=embed_dim
+        )
         num_patches = self.patch_embed.num_patches
-        # --
+
+        # Positional embedding
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim), requires_grad=False)
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1],
-                                            int(self.patch_embed.num_patches**.5),
-                                            cls_token=False)
+        pos_embed = get_2d_sincos_pos_embed(
+            self.pos_embed.shape[-1],
+            int(self.patch_embed.num_patches ** 0.5),
+            cls_token=False
+        )
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-        # --
+
+        # Transformer blocks
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)])
+                dim=embed_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                drop=drop_rate,
+                attn_drop=attn_drop_rate,
+                drop_path=dpr[i],
+                norm_layer=norm_layer
+            )
+            for i in range(depth)
+        ])
         self.norm = norm_layer(embed_dim)
-        # ------
-        self.init_std = init_std
+
+        # Classification head
+        self.head = nn.Linear(self.embed_dim, num_classes)  # Classification head
+
+        # Weight initialization
+        trunc_normal_(self.head.weight, std=init_std)
+        nn.init.constant_(self.head.bias, 0)
+
         self.apply(self._init_weights)
         self.fix_init_weight()
 
@@ -387,46 +407,43 @@ class VisionTransformer(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=self.init_std)
+            trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
-            trunc_normal_(m.weight, std=self.init_std)
-            if m.bias is not None:
+            trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Conv2d) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, masks=None):
-        if masks is not None:
-            if not isinstance(masks, list):
-                masks = [masks]
-
-        # -- patchify x
-        x = self.patch_embed(x)
+        x = self.patch_embed(x)  # Patch embedding
         B, N, D = x.shape
 
-        # -- add positional embedding to x
+        # Add positional embedding
         pos_embed = self.interpolate_pos_encoding(x, self.pos_embed)
         x = x + pos_embed
 
-        # -- mask x
-        if masks is not None:
-            x = apply_masks(x, masks)
-
-        # -- fwd prop
-        for i, blk in enumerate(self.blocks):
+        # Forward through transformer blocks
+        for blk in self.blocks:
             x = blk(x)
 
         if self.norm is not None:
             x = self.norm(x)
 
-        return x
+        # Global Average Pooling
+        x = x.mean(dim=1)  # (B, D)
+
+        # Pass through classification head
+        logits = self.head(x)  # (B, num_classes)
+
+        return logits
 
     def interpolate_pos_encoding(self, x, pos_embed):
-        npatch = x.shape[1] - 1
-        N = pos_embed.shape[1] - 1
+        npatch = x.shape[1]
+        N = pos_embed.shape[1]
         if npatch == N:
             return pos_embed
         class_emb = pos_embed[:, 0]
@@ -440,21 +457,6 @@ class VisionTransformer(nn.Module):
         pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
         return torch.cat((class_emb.unsqueeze(0), pos_embed), dim=1)
 
-
-def vit_predictor(**kwargs):
-    model = VisionTransformerPredictor(
-        mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        **kwargs)
-    return model
-
-
-def vit_tiny(patch_size=16, **kwargs):
-    model = VisionTransformer(
-        patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-
 def vit_small(patch_size=16, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4,
@@ -464,8 +466,16 @@ def vit_small(patch_size=16, **kwargs):
 
 def vit_base(patch_size=16, **kwargs):
     model = VisionTransformer(
-        patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        patch_size=patch_size,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_classes=200,  # Pass num_classes here
+        **kwargs
+    )
     return model
 
 
