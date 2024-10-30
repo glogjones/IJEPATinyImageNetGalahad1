@@ -508,3 +508,6 @@ VIT_EMBED_DIMS = {
     'vit_huge': 1280,
     'vit_giant': 1408,
 }
+
+vit_predictor = VisionTransformerPredictor
+
