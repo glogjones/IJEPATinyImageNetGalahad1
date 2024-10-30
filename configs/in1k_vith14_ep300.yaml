@@ -8,7 +8,7 @@ data:
   image_folder: tiny-imagenet-200/
   num_workers: 10
   pin_mem: true
-  root_path: /share/nas2_3/IJEPA/tiny-imagenet/
+  root_path: /share/nas2_3/IJEPA/
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
