@@ -8,15 +8,15 @@ data:
   image_folder: tiny-imagenet-200/
   num_workers: 10
   pin_mem: true
-  root_path: /content/ijepa/data/tiny-imagenet/
+  root_path: /share/nas2_3/IJEPA/tiny-imagenet/
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
 logging:
-  folder: /content/drive/MyDrive/ijepa_logs/TinyImageNetOutput2/
+  folder: /share/nas2_3/gjones/ijepa_logs/TinyImageNetOutput/
   write_tag: jepa
 mask:
-  allow_overlap: true
+  allow_overlap: false
   aspect_ratio:
   - 0.75
   - 1.5
