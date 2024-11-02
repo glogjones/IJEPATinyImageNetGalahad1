@@ -6,13 +6,10 @@
 #
 
 import argparse
-
-import multiprocessing as mp
-
 import pprint
 import yaml
+import torch
 
-from src.utils.distributed import init_distributed
 from src.train import main as app_main
 
 parser = argparse.ArgumentParser()
@@ -22,44 +19,31 @@ parser.add_argument(
     default='configs.yaml')
 parser.add_argument(
     '--devices', type=str, nargs='+', default=['cuda:0'],
-    help='which devices to use on local machine')
+    help='which device to use on local machine (default is cuda:0 for single GPU)')
 
-
-def process_main(rank, fname, world_size, devices):
+def process_main(rank, fname, devices):
     import os
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[rank].split(':')[-1])
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[0].split(':')[-1])  # Use the first device specified
 
     import logging
     logging.basicConfig()
     logger = logging.getLogger()
-    if rank == 0:
-        logger.setLevel(logging.INFO)
-    else:
-        logger.setLevel(logging.ERROR)
+    logger.setLevel(logging.INFO)
 
     logger.info(f'called-params {fname}')
 
-    # -- load script params
-    params = None
+    # Load script parameters
     with open(fname, 'r') as y_file:
         params = yaml.load(y_file, Loader=yaml.FullLoader)
         logger.info('loaded params...')
         pp = pprint.PrettyPrinter(indent=4)
         pp.pprint(params)
 
-    world_size, rank = init_distributed(rank_and_world_size=(rank, world_size))
-    logger.info(f'Running... (rank: {rank}/{world_size})')
+    logger.info(f'Running on device: {devices[0]}')
     app_main(args=params)
-
 
 if __name__ == '__main__':
     args = parser.parse_args()
 
-    num_gpus = len(args.devices)
-    mp.set_start_method('spawn')
-
-    for rank in range(num_gpus):
-        mp.Process(
-            target=process_main,
-            args=(rank, args.fname, num_gpus, args.devices)
-        ).start()
+    # Run process_main directly for single-GPU execution
+    process_main(0, args.fname, args.devices)
